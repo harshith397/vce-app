@@ -10,6 +10,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, radius, shadows, spacing, typography } from '../theme.js';
+import SegmentedSwitcher from './SegmentedSwitcher.js';
 
 export default function DayWiseAttendanceScreen({
   semester,
@@ -148,32 +149,22 @@ export default function DayWiseAttendanceScreen({
 
   const renderPeriodCell = (period) => {
     if (!period || period.status === 'no_class' || !period.subject) {
-      return (
-        <View style={styles.periodCellEmpty}>
-          <Text style={styles.emptyPeriodText}>-</Text>
-        </View>
-      );
+      return <Text style={styles.emptyPeriodText}>-</Text>;
     }
 
     const isPresent = period.status === 'present';
+    const isAbsent = period.status === 'absent';
 
     return (
-      <View
+      <Text
         style={[
-          styles.periodPill,
-          isPresent ? styles.periodPillPresent : styles.periodPillAbsent,
+          styles.periodSubjectText,
+          isPresent ? styles.textPresent : isAbsent ? styles.textAbsent : styles.emptyPeriodText,
         ]}
+        numberOfLines={1}
       >
-        <Text
-          style={[
-            styles.periodSubjectText,
-            isPresent ? styles.textPresent : styles.textAbsent,
-          ]}
-          numberOfLines={1}
-        >
-          {period.subject}
-        </Text>
-      </View>
+        {period.subject}
+      </Text>
     );
   };
 
@@ -547,35 +538,15 @@ export default function DayWiseAttendanceScreen({
             </View>
           ) : null}
 
-          {/* Apple-Style Segmented View Switcher: Day-Wise -> Subject-Wise -> Additional -> Summary */}
+          {/* Segmented View Switcher: Day-Wise -> Subject-Wise -> Additional -> Summary */}
           {availableTabs.length > 1 ? (
-            <View style={styles.segmentedContainer}>
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={styles.segmentedScrollContent}
-              >
-                {availableTabs.map((tab) => {
-                  const isActive = activeTabKey === tab.key;
-                  return (
-                    <TouchableOpacity
-                      key={tab.key}
-                      style={[styles.segmentedTab, isActive && styles.segmentedTabActive]}
-                      onPress={() => setSelectedTab(tab.key)}
-                      activeOpacity={0.7}
-                    >
-                      <Text
-                        style={[
-                          styles.segmentedTabText,
-                          isActive && styles.segmentedTabTextActive,
-                        ]}
-                      >
-                        {tab.label}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </ScrollView>
+            <View style={styles.switcherWrapper}>
+              <SegmentedSwitcher
+                segments={availableTabs}
+                selectedIndex={Math.max(0, availableTabs.findIndex((t) => t.key === activeTabKey))}
+                onChange={(idx) => setSelectedTab(availableTabs[idx].key)}
+                containerStyle={styles.switcherContainerStyle}
+              />
             </View>
           ) : availableTabs.length === 1 ? (
             <View style={styles.singleTabHeader}>
@@ -712,38 +683,11 @@ const styles = StyleSheet.create({
     color: colors.primary,
     textAlign: 'center',
   },
-  segmentedContainer: {
-    backgroundColor: '#E5E5EA',
-    borderRadius: radius.full,
-    padding: 3,
-    marginBottom: 8,
+  switcherWrapper: {
+    marginBottom: 10,
   },
-  segmentedScrollContent: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
-  segmentedTab: {
-    paddingHorizontal: 14,
-    paddingVertical: 7,
-    borderRadius: radius.full,
-    minHeight: 32,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  segmentedTabActive: {
-    backgroundColor: colors.card,
-    ...shadows.subtle,
-  },
-  segmentedTabText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: colors.secondaryText,
-    letterSpacing: -0.2,
-  },
-  segmentedTabTextActive: {
-    color: colors.primary,
-    fontWeight: '700',
+  switcherContainerStyle: {
+    paddingHorizontal: 0,
   },
   singleTabHeader: {
     marginBottom: 8,
@@ -794,15 +738,16 @@ const styles = StyleSheet.create({
   },
   tableRowHeader: {
     flexDirection: 'row',
+    alignItems: 'stretch',
+    height: 38,
     backgroundColor: colors.tableHeaderBg,
-    paddingVertical: 8,
     borderBottomWidth: 1,
     borderBottomColor: colors.borderStrong,
   },
   tableRow: {
     flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 7,
+    alignItems: 'stretch',
+    minHeight: 38,
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
     backgroundColor: colors.card,
@@ -811,6 +756,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.cardAlt,
   },
   cell: {
+    alignSelf: 'stretch',
     justifyContent: 'center',
     alignItems: 'center',
     paddingHorizontal: 4,
@@ -872,27 +818,10 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: colors.primaryText,
   },
-  periodPill: {
-    width: 78,
-    paddingVertical: 4,
-    paddingHorizontal: 4,
-    borderRadius: radius.sm,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  periodPillPresent: {
-    backgroundColor: colors.successBg,
-    borderWidth: 1,
-    borderColor: '#C3E6CB',
-  },
-  periodPillAbsent: {
-    backgroundColor: colors.destructiveBg,
-    borderWidth: 1,
-    borderColor: '#FECACA',
-  },
   periodSubjectText: {
-    fontSize: 10,
+    fontSize: 11,
     fontWeight: '600',
+    textAlign: 'center',
   },
   textPresent: {
     color: colors.successText,
@@ -900,13 +829,10 @@ const styles = StyleSheet.create({
   textAbsent: {
     color: colors.destructiveText,
   },
-  periodCellEmpty: {
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
   emptyPeriodText: {
     fontSize: 12,
     color: colors.tertiaryText,
+    textAlign: 'center',
   },
   statOl: {
     fontSize: 11,

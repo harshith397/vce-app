@@ -29,6 +29,15 @@
     "plugins": [
       "expo-status-bar"
     ],
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/0dce61de-7b76-4a59-bfa4-707c2faf1225",
+      "enabled": true,
+      "checkAutomatically": "ON_LOAD",
+      "fallbackToCacheTimeout": 0
+    },
     "extra": {
       "eas": {
         "projectId": "0dce61de-7b76-4a59-bfa4-707c2faf1225"

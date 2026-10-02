@@ -1,6 +1,7 @@
 import React from 'react';
-import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 import { colors, radius, shadows, spacing, typography } from '../theme.js';
+import TactileButton from './TactileButton.js';
 
 export default function SemesterCards({
   semesters = [],
@@ -39,18 +40,13 @@ export default function SemesterCards({
       <Text style={styles.sectionTitle}>Academic Semesters</Text>
 
       {sortedSemesters.map((sem, index) => {
-        const isCurrent =
-          currentSemester &&
-          currentSemester.semester === sem.semester &&
-          currentSemester.academicYear === sem.academicYear;
-
         const hasAttendance = Boolean(sem.attendanceUrl);
         const hasMarks = Boolean(sem.marksUrl);
 
         return (
           <View
             key={`${sem.semester}-${sem.academicYear || index}`}
-            style={[styles.card, isCurrent && styles.cardCurrent]}
+            style={styles.card}
           >
             {/* Header */}
             <View style={styles.cardHeader}>
@@ -113,47 +109,19 @@ export default function SemesterCards({
 
             {/* Action Buttons */}
             <View style={styles.buttonRow}>
-              <TouchableOpacity
-                style={[
-                  styles.actionButton,
-                  styles.attButton,
-                  !hasAttendance && styles.buttonDisabled,
-                ]}
+              <TactileButton
+                title="Attendance"
                 disabled={!hasAttendance}
-                activeOpacity={0.7}
                 onPress={() => onOpenAttendance && onOpenAttendance(sem)}
-              >
-                <Text
-                  style={[
-                    styles.buttonText,
-                    styles.attButtonText,
-                    !hasAttendance && styles.buttonTextDisabled,
-                  ]}
-                >
-                  Attendance
-                </Text>
-              </TouchableOpacity>
+                style={styles.actionButton}
+              />
 
-              <TouchableOpacity
-                style={[
-                  styles.actionButton,
-                  styles.marksButton,
-                  !hasMarks && styles.buttonDisabled,
-                ]}
+              <TactileButton
+                title="Marks"
                 disabled={!hasMarks}
-                activeOpacity={0.7}
                 onPress={() => onOpenMarks && onOpenMarks(sem)}
-              >
-                <Text
-                  style={[
-                    styles.buttonText,
-                    styles.marksButtonText,
-                    !hasMarks && styles.buttonTextDisabled,
-                  ]}
-                >
-                  Marks
-                </Text>
-              </TouchableOpacity>
+                style={styles.actionButton}
+              />
             </View>
           </View>
         );
@@ -194,10 +162,6 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
     ...shadows.card,
-  },
-  cardCurrent: {
-    borderColor: colors.primary,
-    borderWidth: 1.5,
   },
   cardHeader: {
     flexDirection: 'row',
@@ -281,35 +245,12 @@ const styles = StyleSheet.create({
   },
   buttonRow: {
     flexDirection: 'row',
+    alignItems: 'center',
     gap: spacing.md,
+    marginTop: spacing.md,
+    marginBottom: 2,
   },
   actionButton: {
     flex: 1,
-    paddingVertical: 9,
-    borderRadius: radius.sm,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  attButton: {
-    backgroundColor: colors.primary,
-  },
-  marksButton: {
-    backgroundColor: colors.primary,
-  },
-  buttonDisabled: {
-    opacity: 0.4,
-  },
-  buttonText: {
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  attButtonText: {
-    color: '#FFFFFF',
-  },
-  marksButtonText: {
-    color: '#FFFFFF',
-  },
-  buttonTextDisabled: {
-    color: colors.secondaryText,
   },
 });

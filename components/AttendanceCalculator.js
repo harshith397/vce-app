@@ -2,16 +2,19 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   ActivityIndicator,
   Animated,
+  Platform,
+  Pressable,
   StyleSheet,
   Text,
-  TextInput,
   TouchableOpacity,
   useWindowDimensions,
   View,
 } from 'react-native';
-import Svg, { Circle, Path } from 'react-native-svg';
+import Slider from '@react-native-community/slider';
+import Svg, { Circle, G, Path, Text as SvgText } from 'react-native-svg';
 import { colors, radius, shadows, spacing } from '../theme.js';
 import { computeAttendanceResult } from '../calculator/attendanceCalculator.js';
+import SegmentedSwitcher from './SegmentedSwitcher.js';
 
 // SVG Icons
 function CheckCircleIcon({ size = 18, color = colors.successText }) {
@@ -59,9 +62,17 @@ function CalendarCheckIcon({ size = 20, color = colors.primary }) {
   );
 }
 
-// Compact Native Donut Ring
-function NativeDonutRing({ percentage, mainColor, trackColor }) {
-  const [animatedValue, setAnimatedValue] = useState(0);
+// Multi-Segment Donut Ring Component with Interactive Leader Line Indicator
+function MultiSegmentDonut({
+  presentees,
+  absentees,
+  extra,
+  currentPercent,
+  selectedSegment,
+  onSelectSegment,
+}) {
+  const { width: windowWidth } = useWindowDimensions();
+  const [animatedProgress, setAnimatedProgress] = useState(0);
 
   useEffect(() => {
     let start = null;
@@ -71,7 +82,7 @@ function NativeDonutRing({ percentage, mainColor, trackColor }) {
     const animate = (timestamp) => {
       if (!start) start = timestamp;
       const progress = Math.min((timestamp - start) / duration, 1);
-      setAnimatedValue(percentage * progress);
+      setAnimatedProgress(progress);
       if (progress < 1) {
         frameId = requestAnimationFrame(animate);
       }
@@ -81,57 +92,316 @@ function NativeDonutRing({ percentage, mainColor, trackColor }) {
     return () => {
       if (frameId) cancelAnimationFrame(frameId);
     };
-  }, [percentage]);
+  }, [presentees, absentees, extra]);
 
-  const size = 132;
-  const strokeWidth = 16;
-  const r = (size - strokeWidth) / 2;
+  // Responsive SVG canvas dimensions
+  const svgWidth = Math.min(Math.max(windowWidth - 40, 310), 360);
+  const svgHeight = 215;
+  const cx = svgWidth / 2;
+  const cy = svgHeight / 2;
+
+  const r = 64;
+  const baseStrokeWidth = 18;
+  const activeStrokeWidth = 24;
   const circumference = 2 * Math.PI * r;
-  const strokeDashoffset = circumference - (animatedValue / 100) * circumference;
+
+  // Filter out zero-count categories completely
+  const allSegments = [
+    { key: 'present', label: 'Present', count: presentees, color: colors.success },
+    { key: 'absent', label: 'Absent', count: absentees, color: colors.destructive },
+    { key: 'extra', label: 'Extra', count: extra, color: colors.primary },
+  ];
+  const activeSegments = allSegments.filter((s) => s.count > 0);
+  const totalCount = activeSegments.reduce((sum, s) => sum + s.count, 0);
+
+  // Selected segment details
+  const selectedInfo = activeSegments.find((s) => s.key === selectedSegment);
+
+  // Scaled minimum arc allocation: guarantees even small categories (e.g. 1-2 extra classes) get a clearly visible arc
+  const MIN_ARC = activeSegments.length > 1 ? 32 : 0;
+  let allocatedMin = 0;
+  let remainingCount = 0;
+
+  const preCalculated = activeSegments.map((seg) => {
+    const proportionalArc = totalCount > 0 ? (seg.count / totalCount) * circumference : 0;
+    if (proportionalArc < MIN_ARC) {
+      allocatedMin += MIN_ARC;
+      return { ...seg, arcTarget: MIN_ARC, isClamped: true };
+    }
+    remainingCount += seg.count;
+    return { ...seg, isClamped: false };
+  });
+
+  const remainingCircumference = Math.max(0, circumference - allocatedMin);
+
+  const finalSegments = preCalculated.map((seg) => {
+    if (seg.isClamped) return seg;
+    const arcTarget = remainingCount > 0 ? (seg.count / remainingCount) * remainingCircumference : 0;
+    return { ...seg, arcTarget };
+  });
+
+  // Calculate arc angles (in clock angle: 0 at 12 o'clock, clockwise in radians)
+  let currentAngle = 0;
+  const segmentedAngles = finalSegments.map((seg) => {
+    const startAngle = currentAngle;
+    const angleSpan = circumference > 0 ? (seg.arcTarget / circumference) * (2 * Math.PI) : 0;
+    const endAngle = startAngle + angleSpan;
+    const midAngle = startAngle + angleSpan / 2;
+    currentAngle = endAngle;
+
+    return {
+      ...seg,
+      startAngle,
+      endAngle,
+      midAngle,
+      angleSpan,
+      pct: totalCount > 0 ? ((seg.count / totalCount) * 100).toFixed(1) : '0.0',
+    };
+  });
+
+  // Geometric Touch Handler: maps touch coordinates directly to donut segments
+  const handleDonutPress = (event) => {
+    const { locationX, locationY } = event.nativeEvent;
+    const dx = locationX - cx;
+    const dy = locationY - cy;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+
+    // If tapped inside center hole: reset/dismiss
+    if (dist < 44) {
+      onSelectSegment(null);
+      return;
+    }
+
+    // If tapped on the donut ring (generous 44px-90px hit band)
+    if (dist >= 44 && dist <= 90) {
+      let touchAngle = Math.atan2(dx, -dy);
+      if (touchAngle < 0) touchAngle += 2 * Math.PI;
+
+      // Find the segment whose angular span contains touchAngle
+      const matched =
+        segmentedAngles.find(
+          (seg) => touchAngle >= seg.startAngle && touchAngle < seg.endAngle
+        ) || segmentedAngles[segmentedAngles.length - 1];
+
+      if (matched) {
+        onSelectSegment(selectedSegment === matched.key ? null : matched.key);
+      }
+      return;
+    }
+
+    // If tapped outside donut ring
+    if (selectedSegment) {
+      onSelectSegment(null);
+    }
+  };
+
+  // Render SVG arcs
+  let renderedSegments = null;
+  if (activeSegments.length === 1) {
+    const singleSeg = activeSegments[0];
+    const isSelected = selectedSegment === singleSeg.key;
+    renderedSegments = (
+      <Circle
+        cx={cx}
+        cy={cy}
+        r={r}
+        fill="none"
+        stroke={singleSeg.color}
+        strokeWidth={isSelected ? activeStrokeWidth : baseStrokeWidth}
+      />
+    );
+  } else {
+    const gapAngle = (3.5 / circumference) * (2 * Math.PI);
+    renderedSegments = segmentedAngles.map((seg) => {
+      const animatedSpan = seg.angleSpan * animatedProgress;
+      const visibleSpan = Math.max(0.01, animatedSpan - gapAngle);
+      const arcStart = seg.startAngle + gapAngle / 2;
+      const arcEnd = arcStart + visibleSpan;
+
+      const x1 = cx + r * Math.sin(arcStart);
+      const y1 = cy - r * Math.cos(arcStart);
+      const x2 = cx + r * Math.sin(arcEnd);
+      const y2 = cy - r * Math.cos(arcEnd);
+      const largeArc = visibleSpan > Math.PI ? 1 : 0;
+      const pathD = `M ${x1.toFixed(2)} ${y1.toFixed(2)} A ${r} ${r} 0 ${largeArc} 1 ${x2.toFixed(2)} ${y2.toFixed(2)}`;
+
+      const isSelected = selectedSegment === seg.key;
+      const strokeWidth = isSelected ? activeStrokeWidth : baseStrokeWidth;
+      const opacity = selectedSegment && !isSelected ? 0.35 : 1;
+
+      return (
+        <Path
+          key={seg.key}
+          d={pathD}
+          fill="none"
+          stroke={seg.color}
+          strokeWidth={strokeWidth}
+          strokeLinecap="butt"
+          opacity={opacity}
+        />
+      );
+    });
+  }
+
+  // Interactive Callout Leader Line for Selected Segment
+  const selectedMid = selectedSegment
+    ? segmentedAngles.find((s) => s.key === selectedSegment)
+    : null;
+  let leaderLineElement = null;
+
+  if (selectedInfo && selectedMid && animatedProgress > 0.4) {
+    const alpha = selectedMid.midAngle;
+    const sinA = Math.sin(alpha);
+    const cosA = Math.cos(alpha);
+
+    // Point 0: outer edge of donut slice
+    const rOuter = r + activeStrokeWidth / 2;
+    const x0 = cx + rOuter * sinA;
+    const y0 = cy - rOuter * cosA;
+
+    // Point 1: radially outward
+    const radialDist = 14;
+    const r1 = rOuter + radialDist;
+    const rawX1 = cx + r1 * sinA;
+    const y1 = cy - r1 * cosA;
+
+    // Point 2: horizontal elbow arm
+    const isRight = sinA >= 0;
+    const clampedX1 = isRight ? Math.min(rawX1, svgWidth - 72) : Math.max(rawX1, 72);
+    const elbowLength = 14;
+    const x2 = isRight ? clampedX1 + elbowLength : clampedX1 - elbowLength;
+    const y2 = y1;
+
+    // Callout text placement
+    const textX = isRight ? x2 + 5 : x2 - 5;
+    const textAnchor = isRight ? 'start' : 'end';
+    const countText = `${selectedInfo.count} ${selectedInfo.count === 1 ? 'class' : 'classes'}`;
+    const subText = `${selectedInfo.label} (${selectedMid.pct}%)`;
+
+    leaderLineElement = (
+      <G key="leader-line">
+        {/* Anchor Dot on Donut Arc Perimeter */}
+        <Circle cx={x0} cy={y0} r={2.5} fill={selectedInfo.color} />
+
+        {/* Elbow Leader Line */}
+        <Path
+          d={`M ${x0.toFixed(1)} ${y0.toFixed(1)} L ${clampedX1.toFixed(1)} ${y1.toFixed(1)} L ${x2.toFixed(1)} ${y2.toFixed(1)}`}
+          stroke={selectedInfo.color}
+          strokeWidth={1.8}
+          fill="none"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+
+        {/* Callout Class Count Text */}
+        <SvgText
+          x={textX.toFixed(1)}
+          y={(y2 - 2).toFixed(1)}
+          textAnchor={textAnchor}
+          fontSize={12}
+          fontWeight="700"
+          fill={selectedInfo.color}
+        >
+          {countText}
+        </SvgText>
+
+        {/* Callout Category & Percentage Subtitle */}
+        <SvgText
+          x={textX.toFixed(1)}
+          y={(y2 + 11).toFixed(1)}
+          textAnchor={textAnchor}
+          fontSize={10}
+          fontWeight="600"
+          fill={colors.secondaryText}
+        >
+          {subText}
+        </SvgText>
+      </G>
+    );
+  }
+
+  const centerHoleSize = 98;
 
   return (
-    <View style={styles.ringWrapper}>
-      <View style={{ width: size, height: size }}>
-        <Svg width={size} height={size} style={{ transform: [{ rotate: '-90deg' }] }}>
-          {/* Background Track */}
-          <Circle
-            cx={size / 2}
-            cy={size / 2}
-            r={r}
-            fill="none"
-            stroke={trackColor}
-            strokeWidth={strokeWidth}
-          />
-          {/* Animated Progress Stroke */}
-          <Circle
-            cx={size / 2}
-            cy={size / 2}
-            r={r}
-            fill="none"
-            stroke={mainColor}
-            strokeWidth={strokeWidth}
-            strokeDasharray={`${circumference} ${circumference}`}
-            strokeDashoffset={strokeDashoffset}
-            strokeLinecap="round"
-          />
-        </Svg>
+    <Pressable
+      onPress={handleDonutPress}
+      style={[styles.donutRingWrapper, { width: svgWidth, height: svgHeight }]}
+    >
+      <Svg width={svgWidth} height={svgHeight} pointerEvents="none">
+        {/* Background Track */}
+        <Circle
+          cx={cx}
+          cy={cy}
+          r={r}
+          fill="none"
+          stroke={colors.border}
+          strokeWidth={baseStrokeWidth}
+        />
+        {/* Distinct Segment Arcs */}
+        {renderedSegments}
+        {/* Callout Leader Line */}
+        {leaderLineElement}
+      </Svg>
 
-        {/* Centered Hero Percentage */}
-        <View style={styles.ringTextOverlay}>
-          <Text style={styles.heroPercentText}>
-            {animatedValue.toFixed(1)}%
-          </Text>
-          <Text style={styles.heroPercentLabel}>Attendance</Text>
-        </View>
+      {/* Center Display Overlay */}
+      <View
+        pointerEvents="none"
+        style={[
+          styles.ringTextOverlay,
+          {
+            width: centerHoleSize,
+            height: centerHoleSize,
+            borderRadius: centerHoleSize / 2,
+            top: cy - centerHoleSize / 2,
+            left: cx - centerHoleSize / 2,
+          },
+        ]}
+      >
+        {selectedInfo ? (
+          <>
+            <Text
+              style={[
+                styles.heroPercentText,
+                { color: selectedInfo.color, fontSize: 24 },
+              ]}
+              numberOfLines={1}
+            >
+              {selectedInfo.count}
+            </Text>
+            <Text
+              style={[
+                styles.heroPercentLabel,
+                { color: selectedInfo.color, fontWeight: '700' },
+              ]}
+              numberOfLines={1}
+            >
+              {selectedInfo.label}
+            </Text>
+            <Text style={styles.donutSubText}>Classes</Text>
+          </>
+        ) : (
+          <>
+            <Text style={styles.heroPercentText} numberOfLines={1}>
+              {(currentPercent * animatedProgress).toFixed(1)}%
+            </Text>
+            <Text style={styles.heroPercentLabel}>Attendance</Text>
+          </>
+        )}
       </View>
-    </View>
+    </Pressable>
   );
 }
 
 // Single Category Attendance Card View
-function AttendanceCard({ category, label, data }) {
-  const [target, setTarget] = useState('75');
-  const [isFocused, setIsFocused] = useState(false);
+function AttendanceCard({
+  category,
+  label,
+  data,
+  onSlidingStart,
+  onSlidingComplete,
+}) {
+  const [target, setTarget] = useState(75);
+  const [selectedSegment, setSelectedSegment] = useState(null);
 
   const totalClasses = Number(data?.['Total Classes'] || 0);
   const presentees = Number(data?.['Presentees'] || 0);
@@ -141,30 +411,29 @@ function AttendanceCard({ category, label, data }) {
 
   const currentPercent = totalClasses > 0 ? (attended / totalClasses) * 100 : 0;
 
-  // Semantic Colors
-  const getStateColor = (pct) => {
-    if (pct > 85) return colors.success; // #34C759
-    if (pct >= 75) return colors.warning; // #FF9500
-    return colors.destructive; // #FF3B30
-  };
-
-  const mainColor = getStateColor(currentPercent);
-  const trackColor = colors.border; // #E5E5EA
+  // Active non-zero segments for side legend
+  const allSegments = [
+    { key: 'present', label: 'Present', count: presentees, color: colors.success },
+    { key: 'absent', label: 'Absent', count: absentees, color: colors.destructive },
+    { key: 'extra', label: 'Extra', count: extra, color: colors.primary },
+  ];
+  const activeSegments = allSegments.filter((s) => s.count > 0);
+  const totalCount = activeSegments.reduce((sum, s) => sum + s.count, 0);
+  const selectedInfo = activeSegments.find((s) => s.key === selectedSegment);
 
   const result = computeAttendanceResult({
     category,
     totalClasses,
     attended,
-    target,
+    target: String(target),
   });
 
   return (
     <View style={styles.card}>
-      {/* Category Header with Semantic Status Pill */}
+      {/* Category Header with Semantic Status Pill (Clean: no 156/200 classes text) */}
       <View style={styles.cardTopRow}>
-        <View>
+        <View style={styles.cardHeaderTitleGroup}>
           <Text style={styles.categoryTitle}>{label}</Text>
-          
         </View>
 
         <View
@@ -192,122 +461,128 @@ function AttendanceCard({ category, label, data }) {
         </View>
       </View>
 
-      {/* Centered Donut Ring */}
-      <NativeDonutRing
-        percentage={currentPercent}
-        mainColor={mainColor}
-        trackColor={trackColor}
-      />
+      {/* Centered Donut Chart with Interactive Leader Line Indicator */}
+      <View style={styles.donutSection}>
+        <MultiSegmentDonut
+          presentees={presentees}
+          absentees={absentees}
+          extra={extra}
+          currentPercent={currentPercent}
+          selectedSegment={selectedSegment}
+          onSelectSegment={setSelectedSegment}
+        />
 
-      
-
-      {/* Metrics Breakdown Row */}
-      <View style={styles.metricsRow}>
-        <View style={styles.metricItem}>
-          <Text style={styles.metricLabel}>Present</Text>
-          <Text style={[styles.metricValue, styles.metricPresent]}>
-            {presentees}
-          </Text>
-        </View>
-
-        <View style={styles.metricDivider} />
-
-        <View style={styles.metricItem}>
-          <Text style={styles.metricLabel}>Absent</Text>
-          <Text style={[styles.metricValue, styles.metricAbsent]}>
-            {absentees}
-          </Text>
-        </View>
-
-        <View style={styles.metricDivider} />
-
-        <View style={styles.metricItem}>
-          <Text style={styles.metricLabel}>Extra</Text>
-          <Text style={[styles.metricValue, styles.metricExtra]}>
-            {extra}
-          </Text>
-        </View>
-
-        <View style={styles.metricDivider} />
-
-        <View style={styles.metricItem}>
-          <Text style={styles.metricLabel}>Total</Text>
-          <Text style={styles.metricValue}>{totalClasses}</Text>
+        {/* Bottom Reference Legend: clean, compact horizontal row */}
+        <View style={styles.legendContainer}>
+          {activeSegments.map((seg) => {
+            const isSelected = selectedSegment === seg.key;
+            return (
+              <TouchableOpacity
+                key={seg.key}
+                style={[
+                  styles.legendRow,
+                  isSelected && styles.legendRowSelected,
+                ]}
+                onPress={() =>
+                  setSelectedSegment(selectedSegment === seg.key ? null : seg.key)
+                }
+                activeOpacity={0.7}
+              >
+                <View style={[styles.legendSwatch, { backgroundColor: seg.color }]} />
+                <Text
+                  style={[
+                    styles.legendLabel,
+                    isSelected && { color: seg.color, fontWeight: '700' },
+                  ]}
+                >
+                  {seg.label}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
         </View>
       </View>
 
       {/* Card Section Separator */}
       <View style={styles.separator} />
 
-      {/* Target Attendance Calculator Row */}
+      {/* Target Attendance & Platform-Native Slider Section */}
       <View style={styles.calculatorSection}>
-        <View style={styles.calculatorHeaderRow}>
-          <View style={styles.calculatorTitleGroup}>
-            <TargetIcon size={16} color={colors.secondaryText} />
-            <Text style={styles.calculatorLabel}>Target Attendance</Text>
+        {/* Header row: Target on left, Projection badge on right */}
+        <View style={styles.calcHeaderRow}>
+          <View style={styles.targetLabelGroup}>
+            <View style={styles.targetTitleRow}>
+              <TargetIcon size={16} color={colors.secondaryText} />
+              <Text style={styles.targetLabel}>Target</Text>
+            </View>
+            <Text style={styles.targetPercentText}>{target}%</Text>
           </View>
 
-          {/* Native Styled Input */}
-          <View
-            style={[
-              styles.inputContainer,
-              isFocused && styles.inputContainerFocused,
-            ]}
-          >
-            <TextInput
-              style={styles.textInput}
-              keyboardType="numeric"
-              maxLength={3}
-              placeholder="75"
-              placeholderTextColor={colors.tertiaryText}
-              value={target}
-              onFocus={() => setIsFocused(true)}
-              onBlur={() => setIsFocused(false)}
-              onChangeText={(val) => {
-                if (val === '') {
-                  setTarget('');
-                  return;
-                }
-                const num = Number(val);
-                if (!isNaN(num)) {
-                  setTarget(String(Math.max(0, Math.min(100, Math.round(num)))));
-                }
-              }}
-            />
-            <Text style={styles.inputPercentSign}>%</Text>
+          {/* Dynamic Projection Badge */}
+          <View style={styles.projectionWrapper}>
+            {target <= 0 ? (
+              <View style={styles.neutralPill}>
+                <Text style={styles.neutralPillText}>Slide to set target</Text>
+              </View>
+            ) : result?.mode === 'bunk' ? (
+              <View style={styles.bunkPill}>
+                <CheckCircleIcon size={16} color={colors.successText} />
+                <Text style={styles.bunkPillText}>
+                  Bunk: {result.count} {result.count === 1 ? 'class' : 'classes'}
+                </Text>
+              </View>
+            ) : result?.mode === 'attend' ? (
+              <View style={styles.attendPill}>
+                <TrendingUpIcon size={16} color={colors.primary} />
+                <Text style={styles.attendPillText}>
+                  Attend: {result.count} {result.count === 1 ? 'class' : 'classes'}
+                </Text>
+              </View>
+            ) : (
+              <View style={styles.unreachablePill}>
+                <AlertCircleIcon size={16} color={colors.destructiveText} />
+                <Text style={styles.unreachablePillText}>
+                  Target not attainable
+                </Text>
+              </View>
+            )}
           </View>
         </View>
 
-        {/* Informational Callout Box */}
-        <View style={styles.resultContainer}>
-          {!target || target.trim() === '' ? (
-            <View style={styles.calloutEmpty}>
-              <Text style={styles.calloutEmptyText}>
-                Set a target percentage to calculate projection.
-              </Text>
-            </View>
-          ) : result?.mode === 'bunk' ? (
-            <View style={styles.calloutBunk}>
-              <CheckCircleIcon size={18} color={colors.successText} />
-              <Text style={styles.calloutBunkText}>
-                You can bunk {result.count} classes
-              </Text>
-            </View>
-          ) : result?.mode === 'attend' ? (
-            <View style={styles.calloutAttend}>
-              <TrendingUpIcon size={18} color={colors.primary} />
-              <Text style={styles.calloutAttendText}>
-                You need {result.count} more classes
-              </Text>
-            </View>
-          ) : (
-            <View style={styles.calloutUnreachable}>
-              <AlertCircleIcon size={18} color={colors.destructiveText} />
-              <Text style={styles.calloutUnreachableText}>
-                Target not attainable
-              </Text>
-            </View>
-          )}
+        {/* Platform Native Slider */}
+        <View
+          style={styles.sliderWrapper}
+          onTouchStart={() => onSlidingStart?.()}
+          onTouchEnd={() => onSlidingComplete?.()}
+          onTouchCancel={() => onSlidingComplete?.()}
+        >
+          <Slider
+            style={styles.slider}
+            minimumValue={0}
+            maximumValue={100}
+            step={1}
+            value={target}
+            onValueChange={(val) => setTarget(Math.round(val))}
+            onSlidingStart={() => onSlidingStart?.()}
+            onSlidingComplete={() => onSlidingComplete?.()}
+            minimumTrackTintColor={colors.primary}
+            maximumTrackTintColor={Platform.OS === 'android' ? '#E0E0E0' : '#E5E5EA'}
+            thumbTintColor={Platform.OS === 'android' ? colors.primary : undefined}
+            thumbSize={Platform.OS === 'android' ? 28 : undefined}
+          />
+          <View style={styles.sliderScaleRow}>
+            <Text style={styles.sliderScaleLabel}>0%</Text>
+            <Text style={styles.sliderScaleLabel}>50%</Text>
+            <Text
+              style={[
+                styles.sliderScaleLabel,
+                target === 75 && styles.sliderScaleActive,
+              ]}
+            >
+              75%
+            </Text>
+            <Text style={styles.sliderScaleLabel}>100%</Text>
+          </View>
         </View>
       </View>
     </View>
@@ -321,25 +596,22 @@ function AttendanceCardSkeleton() {
       <View style={styles.cardTopRow}>
         <View>
           <View style={styles.skeletonBarTitle} />
-          <View style={styles.skeletonBarSubtitle} />
         </View>
         <View style={styles.skeletonPill} />
       </View>
 
-      <View style={styles.skeletonRingContainer}>
-        <ActivityIndicator size="large" color={colors.primary} />
-        <Text style={styles.skeletonText}>Loading attendance data...</Text>
-      </View>
-
-      <View style={styles.skeletonProgressBar} />
-
-      <View style={styles.metricsRow}>
-        {[1, 2, 3, 4].map((i) => (
-          <View key={i} style={styles.metricItem}>
-            <View style={styles.skeletonMetricNum} />
-            <View style={styles.skeletonMetricLbl} />
-          </View>
-        ))}
+      <View style={styles.skeletonDonutSection}>
+        <View style={styles.skeletonRing}>
+          <ActivityIndicator size="small" color={colors.primary} />
+        </View>
+        <View style={styles.skeletonLegendContainer}>
+          {[1, 2, 3].map((i) => (
+            <View key={i} style={styles.skeletonLegendRow}>
+              <View style={styles.skeletonSwatch} />
+              <View style={styles.skeletonLegendLine1} />
+            </View>
+          ))}
+        </View>
       </View>
 
       <View style={styles.separator} />
@@ -347,8 +619,9 @@ function AttendanceCardSkeleton() {
       <View style={styles.calculatorSection}>
         <View style={styles.skeletonCalcRow}>
           <View style={styles.skeletonCalcLabel} />
-          <View style={styles.skeletonInputBox} />
+          <View style={styles.skeletonBadge} />
         </View>
+        <View style={styles.skeletonSliderTrack} />
       </View>
     </View>
   );
@@ -364,23 +637,48 @@ export default function AttendanceCalculator({
   const scrollRef = useRef(null);
   const scrollX = useRef(new Animated.Value(0)).current;
   const [activeIndex, setActiveIndex] = useState(0);
+  const [isSliding, setIsSliding] = useState(false);
 
+  // Dynamically extract all available categories from parsed attendance data
   const categories = [];
 
-  if (attendanceData?.regular) {
-    categories.push({
-      key: 'Regular',
-      label: 'Regular Attendance',
-      data: attendanceData.regular,
+  if (Array.isArray(attendanceData?.categories) && attendanceData.categories.length > 0) {
+    attendanceData.categories.forEach((cat) => {
+      if (cat?.name && cat?.data) {
+        categories.push({
+          key: cat.name,
+          label: `${cat.name} Attendance`,
+          data: cat.data,
+        });
+      }
     });
-  }
+  } else if (attendanceData?.categories && typeof attendanceData.categories === 'object') {
+    Object.entries(attendanceData.categories).forEach(([name, data]) => {
+      if (data && typeof data === 'object') {
+        categories.push({
+          key: name,
+          label: `${name} Attendance`,
+          data: data,
+        });
+      }
+    });
+  } else {
+    // Backwards-compatibility fallback
+    if (attendanceData?.regular) {
+      categories.push({
+        key: 'Regular',
+        label: 'Regular Attendance',
+        data: attendanceData.regular,
+      });
+    }
 
-  if (attendanceData?.eca) {
-    categories.push({
-      key: 'ECA',
-      label: 'ECA Attendance',
-      data: attendanceData.eca,
-    });
+    if (attendanceData?.eca) {
+      categories.push({
+        key: 'ECA',
+        label: 'ECA Attendance',
+        data: attendanceData.eca,
+      });
+    }
   }
 
   // Width of each card inside its screenWidth container
@@ -435,52 +733,32 @@ export default function AttendanceCalculator({
 
   return (
     <View style={styles.container}>
-      {/* Section Header with Segmented Category Tabs if > 1 category */}
+      {/* Section Header with Title and Subtitle */}
       <View style={styles.sectionHeader}>
         <View style={styles.sectionTitleGroup}>
-          
           <Text style={styles.sectionTitle} numberOfLines={1}>
             Attendance Calculator
           </Text>
         </View>
-
-        {/* Category Switcher Tabs for quick selection */}
-        {categories.length > 1 ? (
-          <View style={styles.tabSwitcher}>
-            {categories.map((cat, idx) => {
-              const isActive = idx === activeIndex;
-              return (
-                <TouchableOpacity
-                  key={cat.key}
-                  style={[
-                    styles.tabButton,
-                    isActive && styles.tabButtonActive,
-                  ]}
-                  activeOpacity={0.7}
-                  onPress={() => {
-                    scrollRef.current?.scrollTo({
-                      x: idx * screenWidth,
-                      animated: true,
-                    });
-                    setActiveIndex(idx);
-                  }}
-                >
-                  <Text
-                    style={[
-                      styles.tabButtonText,
-                      isActive && styles.tabButtonTextActive,
-                    ]}
-                  >
-                    {cat.key}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-        ) : (
-          <Text style={styles.sectionSubtitle}>Current semester</Text>
-        )}
+        <Text style={styles.sectionSubtitle}>Current semester</Text>
       </View>
+
+      {/* Platform-Adaptive Switcher: iOS 26 Liquid Glass on iOS, Platform-Native Tab Bar on Android */}
+      {categories.length > 1 && (
+        <View style={styles.switcherRow}>
+          <SegmentedSwitcher
+            segments={categories.map((c) => ({ key: c.key, label: c.key }))}
+            selectedIndex={activeIndex}
+            onChange={(idx) => {
+              scrollRef.current?.scrollTo({
+                x: idx * screenWidth,
+                animated: true,
+              });
+              setActiveIndex(idx);
+            }}
+          />
+        </View>
+      )}
 
       {/* Single Category: Full Width Display */}
       {categories.length === 1 ? (
@@ -498,6 +776,7 @@ export default function AttendanceCalculator({
             ref={scrollRef}
             horizontal
             pagingEnabled
+            scrollEnabled={!isSliding}
             showsHorizontalScrollIndicator={false}
             bounces={false}
             onScroll={Animated.event(
@@ -565,6 +844,8 @@ export default function AttendanceCalculator({
                       category={cat.key}
                       label={cat.label}
                       data={cat.data}
+                      onSlidingStart={() => setIsSliding(true)}
+                      onSlidingComplete={() => setIsSliding(false)}
                     />
                   </Animated.View>
                 </View>
@@ -629,34 +910,9 @@ const styles = StyleSheet.create({
     color: colors.secondaryText,
   },
 
-  // Switcher Tabs (Enlarged iOS-Style Segmented Control)
-  tabSwitcher: {
-    flexDirection: 'row',
-    backgroundColor: '#E5E5EA',
-    borderRadius: radius.full,
-    padding: 3,
-  },
-  tabButton: {
-    paddingHorizontal: 16,
-    paddingVertical: 7,
-    borderRadius: radius.full,
-    minHeight: 34,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  tabButtonActive: {
-    backgroundColor: colors.card,
-    ...shadows.subtle,
-  },
-  tabButtonText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: colors.secondaryText,
-    letterSpacing: -0.2,
-  },
-  tabButtonTextActive: {
-    color: colors.primary,
-    fontWeight: '700',
+  // Native Platform Switcher Styles
+  switcherRow: {
+    marginBottom: spacing.md,
   },
 
   // Carousel Page & Wrapper
@@ -745,20 +1001,26 @@ const styles = StyleSheet.create({
     color: colors.destructiveText,
   },
 
-  // Donut Ring
-  ringWrapper: {
+  cardHeaderTitleGroup: {
+    flex: 1,
+    marginRight: spacing.sm,
+  },
+
+  // Donut Section (Centered composition with leader line indicator)
+  donutSection: {
     alignItems: 'center',
     justifyContent: 'center',
     marginVertical: spacing.xs,
   },
-  ringTextOverlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
+  donutRingWrapper: {
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  ringTextOverlay: {
+    position: 'absolute',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.card,
   },
   heroPercentText: {
     fontSize: 26,
@@ -768,189 +1030,180 @@ const styles = StyleSheet.create({
     letterSpacing: -0.5,
   },
   heroPercentLabel: {
-    fontSize: 11,
+    fontSize: 12,
     color: colors.secondaryText,
+    fontWeight: '600',
+    marginTop: -1,
+  },
+  donutSubText: {
+    fontSize: 10,
+    color: colors.tertiaryText,
     fontWeight: '500',
-    marginTop: -2,
+    marginTop: 1,
   },
 
-  // Progress Bar
-  progressTrack: {
-    height: 5,
-    backgroundColor: '#E5E5EA',
-    borderRadius: radius.full,
-    overflow: 'hidden',
-    marginVertical: spacing.xs,
-  },
-  progressFill: {
-    height: '100%',
-    borderRadius: radius.full,
-  },
-
-  // Metrics Row
-  metricsRow: {
+  // Reference Legend (Clean horizontal row below donut)
+  legendContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-around',
-    backgroundColor: colors.background,
-    borderRadius: radius.base,
-    paddingVertical: 9,
-    paddingHorizontal: 4,
-    marginVertical: spacing.sm,
+    justifyContent: 'center',
+    flexWrap: 'wrap',
+    gap: 16,
+    marginTop: spacing.xs,
+    marginBottom: spacing.xs,
   },
-  metricItem: {
+  legendRow: {
+    flexDirection: 'row',
     alignItems: 'center',
-    flex: 1,
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderRadius: radius.full,
   },
-  metricLabel: {
-    fontSize: 10,
+  legendRowSelected: {
+    backgroundColor: '#F2F2F7',
+  },
+  legendSwatch: {
+    width: 9,
+    height: 9,
+    borderRadius: 3,
+    marginRight: 6,
+  },
+  legendLabel: {
+    fontSize: 13,
     fontWeight: '600',
-    color: colors.secondaryText,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  metricValue: {
-    fontSize: 15,
-    fontWeight: '700',
     color: colors.primaryText,
-    fontVariant: ['tabular-nums'],
-    marginTop: 2,
-  },
-  metricPresent: {
-    color: colors.successText,
-  },
-  metricAbsent: {
-    color: colors.destructiveText,
-  },
-  metricExtra: {
-    color: colors.primary,
-  },
-  metricDivider: {
-    width: 1,
-    height: 18,
-    backgroundColor: colors.border,
   },
 
   separator: {
     height: StyleSheet.hairlineWidth,
     backgroundColor: colors.border,
-    marginVertical: spacing.xs,
+    marginTop: spacing.md,
+    marginBottom: spacing.md,
   },
 
-  // Calculator Section
+  // Calculator Section (Spacious, prominent and comfortable)
   calculatorSection: {
-    marginTop: 4,
+    marginTop: spacing.xs,
+    paddingTop: spacing.xs,
+    paddingBottom: spacing.sm,
   },
-  calculatorHeaderRow: {
+  calcHeaderRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: spacing.xs,
+    marginBottom: spacing.sm,
+    paddingHorizontal: spacing.xs,
   },
-  calculatorTitleGroup: {
+  targetLabelGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  targetTitleRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
   },
-  calculatorLabel: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: colors.primaryText,
-  },
-  inputContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.neutralButton,
-    borderRadius: radius.sm,
-    paddingHorizontal: 8,
-    height: 34,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  inputContainerFocused: {
-    borderColor: colors.primary,
-    backgroundColor: colors.card,
-  },
-  textInput: {
-    width: 38,
-    fontSize: 14,
+  targetLabel: {
+    fontSize: 15,
     fontWeight: '700',
-    color: colors.primaryText,
-    textAlign: 'center',
-    paddingVertical: 0,
-  },
-  inputPercentSign: {
-    fontSize: 13,
-    fontWeight: '600',
     color: colors.secondaryText,
+  },
+  targetPercentText: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: colors.primaryText,
+    fontVariant: ['tabular-nums'],
+    letterSpacing: -0.3,
+  },
+  projectionWrapper: {
+    alignItems: 'flex-end',
   },
 
-  // Callout Boxes
-  resultContainer: {
-    marginTop: spacing.md,
-    marginBottom: spacing.sm,
-  },
-  calloutEmpty: {
-    backgroundColor: colors.neutralButton,
-    paddingVertical: 7,
-    paddingHorizontal: spacing.sm,
-    borderRadius: radius.sm,
-    alignItems: 'center',
-  },
-  calloutEmptyText: {
-    fontSize: 14,
-    color: colors.secondaryText,
-  },
-  calloutBunk: {
+  // Dynamic Projection Pills (Substantial, comfortable touch padding & clear typography)
+  bunkPill: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: colors.successBg,
     borderColor: '#C3E6CB',
     borderWidth: 1,
-    paddingVertical: 7,
-    paddingHorizontal: spacing.sm,
-    borderRadius: radius.sm,
-    gap: 8,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: radius.full,
+    gap: 6,
   },
-  calloutBunkText: {
-    fontSize: 14,
-    fontWeight: '600',
+  bunkPillText: {
+    fontSize: 13,
+    fontWeight: '700',
     color: colors.successText,
-    flex: 1,
   },
-  calloutAttend: {
+  attendPill: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#EBF5FF',
     borderColor: '#BFDBFE',
     borderWidth: 1,
-    paddingVertical: 7,
-    paddingHorizontal: spacing.sm,
-    borderRadius: radius.sm,
-    gap: 8,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: radius.full,
+    gap: 6,
   },
-  calloutAttendText: {
-    fontSize: 14,
-    fontWeight: '600',
+  attendPillText: {
+    fontSize: 13,
+    fontWeight: '700',
     color: colors.primary,
-    flex: 1,
   },
-  calloutUnreachable: {
+  unreachablePill: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: colors.destructiveBg,
     borderColor: '#FECACA',
     borderWidth: 1,
-    paddingVertical: 7,
-    paddingHorizontal: spacing.sm,
-    borderRadius: radius.sm,
-    gap: 8,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: radius.full,
+    gap: 6,
   },
-  calloutUnreachableText: {
-    fontSize: 14,
-    fontWeight: '600',
+  unreachablePillText: {
+    fontSize: 13,
+    fontWeight: '700',
     color: colors.destructiveText,
-    flex: 1,
+  },
+  neutralPill: {
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: radius.full,
+    backgroundColor: colors.neutralButton,
+  },
+  neutralPillText: {
+    fontSize: 13,
+    color: colors.secondaryText,
+    fontWeight: '600',
+  },
+
+  // Slider & Scale (Platform-tailored width: wider on Android, inset on iOS)
+  sliderWrapper: {
+    marginTop: spacing.xs,
+    marginHorizontal: Platform.OS === 'android' ? 6 : spacing.base,
+  },
+  slider: {
+    width: '100%',
+    height: Platform.OS === 'android' ? 44 : 40,
+  },
+  sliderScaleRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingHorizontal: Platform.OS === 'android' ? 2 : 4,
+    marginTop: 0,
+  },
+  sliderScaleLabel: {
+    fontSize: 11,
+    color: colors.tertiaryText,
+    fontWeight: '600',
+  },
+  sliderScaleActive: {
+    color: colors.primary,
+    fontWeight: '800',
   },
 
   // Skeleton Styles
@@ -973,36 +1226,42 @@ const styles = StyleSheet.create({
     backgroundColor: '#E5E5EA',
     borderRadius: radius.full,
   },
-  skeletonRingContainer: {
-    width: '100%',
-    height: 120,
+  skeletonDonutSection: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginVertical: spacing.md,
+    gap: 12,
+  },
+  skeletonRing: {
+    width: 154,
+    height: 154,
+    borderRadius: 77,
+    borderWidth: 18,
+    borderColor: '#E5E5EA',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  skeletonText: {
-    fontSize: 12,
-    color: colors.secondaryText,
-    marginTop: 8,
-    fontWeight: '500',
+  skeletonLegendContainer: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 16,
   },
-  skeletonProgressBar: {
-    height: 5,
+  skeletonLegendRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  skeletonSwatch: {
+    width: 9,
+    height: 9,
+    borderRadius: 3,
     backgroundColor: '#E5E5EA',
-    borderRadius: radius.full,
-    marginVertical: spacing.xs,
+    marginRight: 6,
   },
-  skeletonMetricNum: {
-    width: 24,
-    height: 14,
+  skeletonLegendLine1: {
+    width: 46,
+    height: 10,
     backgroundColor: '#E5E5EA',
     borderRadius: 3,
-    marginBottom: 4,
-  },
-  skeletonMetricLbl: {
-    width: 32,
-    height: 8,
-    backgroundColor: '#F2F2F7',
-    borderRadius: 2,
   },
   skeletonCalcRow: {
     flexDirection: 'row',
@@ -1011,15 +1270,23 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
   },
   skeletonCalcLabel: {
-    width: 110,
-    height: 12,
+    width: 130,
+    height: 16,
     backgroundColor: '#E5E5EA',
     borderRadius: 3,
   },
-  skeletonInputBox: {
-    width: 50,
-    height: 30,
+  skeletonBadge: {
+    width: 100,
+    height: 26,
     backgroundColor: '#E5E5EA',
-    borderRadius: 6,
+    borderRadius: radius.full,
+  },
+  skeletonSliderTrack: {
+    marginHorizontal: Platform.OS === 'android' ? 6 : spacing.base,
+    height: 6,
+    backgroundColor: '#E5E5EA',
+    borderRadius: 3,
+    marginTop: 14,
+    marginBottom: 8,
   },
 });

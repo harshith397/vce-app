@@ -83,6 +83,7 @@ export function getAttendanceParserScript() {
 
     var regularData = null;
     var ecaData = null;
+    var categoriesList = [];
 
     for (var i = startRowIdx; i < rows.length; i++) {
       var cells = rows[i].querySelectorAll('td');
@@ -103,6 +104,13 @@ export function getAttendanceParserScript() {
         "Total Attendance": totalAttendance
       };
 
+      if (typeText) {
+        categoriesList.push({
+          name: typeText,
+          data: record
+        });
+      }
+
       var lowerType = typeText.toLowerCase();
       if (lowerType.indexOf('regular') !== -1) {
         regularData = record;
@@ -113,14 +121,15 @@ export function getAttendanceParserScript() {
       }
     }
 
-    if (!regularData && !ecaData) {
+    if (!regularData && !ecaData && categoriesList.length === 0) {
       window.ReactNativeWebView.postMessage(JSON.stringify({
         type: "ATTENDANCE_DATA",
         available: false,
         reason: "No attendance records found in summary table",
         summaryPeriod: summaryPeriod,
         regular: null,
-        eca: null
+        eca: null,
+        categories: []
       }));
       return;
     }
@@ -130,7 +139,8 @@ export function getAttendanceParserScript() {
       available: true,
       summaryPeriod: summaryPeriod,
       regular: regularData,
-      eca: ecaData
+      eca: ecaData,
+      categories: categoriesList
     }));
 
     } catch (err) {
