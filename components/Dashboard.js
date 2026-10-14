@@ -34,7 +34,7 @@ export default function Dashboard({
       <View style={styles.header}>
         <View style={styles.headerTitleBlock}>
           
-          <Text style={styles.headerTitle}>Academic Dashboard</Text>
+          <Text style={styles.headerTitle}>Dashboard</Text>
         </View>
 
         <View style={styles.headerActions}>

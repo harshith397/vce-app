@@ -6,11 +6,11 @@ import {
   Pressable,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   useWindowDimensions,
   View,
 } from 'react-native';
-import Slider from '@react-native-community/slider';
 import Svg, { Circle, G, Path, Text as SvgText } from 'react-native-svg';
 import { colors, radius, shadows, spacing } from '../theme.js';
 import { computeAttendanceResult } from '../calculator/attendanceCalculator.js';
@@ -397,10 +397,9 @@ function AttendanceCard({
   category,
   label,
   data,
-  onSlidingStart,
-  onSlidingComplete,
 }) {
-  const [target, setTarget] = useState(75);
+  const [target, setTarget] = useState('75');
+  const [isFocused, setIsFocused] = useState(false);
   const [selectedSegment, setSelectedSegment] = useState(null);
 
   const totalClasses = Number(data?.['Total Classes'] || 0);
@@ -425,7 +424,7 @@ function AttendanceCard({
     category,
     totalClasses,
     attended,
-    target: String(target),
+    target,
   });
 
   return (
@@ -506,83 +505,75 @@ function AttendanceCard({
       {/* Card Section Separator */}
       <View style={styles.separator} />
 
-      {/* Target Attendance & Platform-Native Slider Section */}
+      {/* Target Attendance Calculator Row */}
       <View style={styles.calculatorSection}>
-        {/* Header row: Target on left, Projection badge on right */}
-        <View style={styles.calcHeaderRow}>
-          <View style={styles.targetLabelGroup}>
-            <View style={styles.targetTitleRow}>
-              <TargetIcon size={16} color={colors.secondaryText} />
-              <Text style={styles.targetLabel}>Target</Text>
-            </View>
-            <Text style={styles.targetPercentText}>{target}%</Text>
+        <View style={styles.calculatorHeaderRow}>
+          <View style={styles.calculatorTitleGroup}>
+            <TargetIcon size={16} color={colors.secondaryText} />
+            <Text style={styles.calculatorLabel}>Target Attendance</Text>
           </View>
 
-          {/* Dynamic Projection Badge */}
-          <View style={styles.projectionWrapper}>
-            {target <= 0 ? (
-              <View style={styles.neutralPill}>
-                <Text style={styles.neutralPillText}>Slide to set target</Text>
-              </View>
-            ) : result?.mode === 'bunk' ? (
-              <View style={styles.bunkPill}>
-                <CheckCircleIcon size={16} color={colors.successText} />
-                <Text style={styles.bunkPillText}>
-                  Bunk: {result.count} {result.count === 1 ? 'class' : 'classes'}
-                </Text>
-              </View>
-            ) : result?.mode === 'attend' ? (
-              <View style={styles.attendPill}>
-                <TrendingUpIcon size={16} color={colors.primary} />
-                <Text style={styles.attendPillText}>
-                  Attend: {result.count} {result.count === 1 ? 'class' : 'classes'}
-                </Text>
-              </View>
-            ) : (
-              <View style={styles.unreachablePill}>
-                <AlertCircleIcon size={16} color={colors.destructiveText} />
-                <Text style={styles.unreachablePillText}>
-                  Target not attainable
-                </Text>
-              </View>
-            )}
+          {/* Native Styled Input */}
+          <View
+            style={[
+              styles.inputContainer,
+              isFocused && styles.inputContainerFocused,
+            ]}
+          >
+            <TextInput
+              style={styles.textInput}
+              keyboardType="numeric"
+              maxLength={3}
+              placeholder="75"
+              placeholderTextColor={colors.tertiaryText}
+              value={target}
+              onFocus={() => setIsFocused(true)}
+              onBlur={() => setIsFocused(false)}
+              onChangeText={(val) => {
+                if (val === '') {
+                  setTarget('');
+                  return;
+                }
+                const num = Number(val);
+                if (!isNaN(num)) {
+                  setTarget(String(Math.max(0, Math.min(100, Math.round(num)))));
+                }
+              }}
+            />
+            <Text style={styles.inputPercentSign}>%</Text>
           </View>
         </View>
 
-        {/* Platform Native Slider */}
-        <View
-          style={styles.sliderWrapper}
-          onTouchStart={() => onSlidingStart?.()}
-          onTouchEnd={() => onSlidingComplete?.()}
-          onTouchCancel={() => onSlidingComplete?.()}
-        >
-          <Slider
-            style={styles.slider}
-            minimumValue={0}
-            maximumValue={100}
-            step={1}
-            value={target}
-            onValueChange={(val) => setTarget(Math.round(val))}
-            onSlidingStart={() => onSlidingStart?.()}
-            onSlidingComplete={() => onSlidingComplete?.()}
-            minimumTrackTintColor={colors.primary}
-            maximumTrackTintColor={Platform.OS === 'android' ? '#E0E0E0' : '#E5E5EA'}
-            thumbTintColor={Platform.OS === 'android' ? colors.primary : undefined}
-            thumbSize={Platform.OS === 'android' ? 28 : undefined}
-          />
-          <View style={styles.sliderScaleRow}>
-            <Text style={styles.sliderScaleLabel}>0%</Text>
-            <Text style={styles.sliderScaleLabel}>50%</Text>
-            <Text
-              style={[
-                styles.sliderScaleLabel,
-                target === 75 && styles.sliderScaleActive,
-              ]}
-            >
-              75%
-            </Text>
-            <Text style={styles.sliderScaleLabel}>100%</Text>
-          </View>
+        {/* Informational Callout Box */}
+        <View style={styles.resultContainer}>
+          {!target || String(target).trim() === '' ? (
+            <View style={styles.calloutEmpty}>
+              <Text style={styles.calloutEmptyText}>
+                Set a target percentage to calculate projection.
+              </Text>
+            </View>
+          ) : result?.mode === 'bunk' ? (
+            <View style={styles.calloutBunk}>
+              <CheckCircleIcon size={18} color={colors.successText} />
+              <Text style={styles.calloutBunkText}>
+                You can bunk {result.count} {result.count === 1 ? 'class' : 'classes'}
+              </Text>
+            </View>
+          ) : result?.mode === 'attend' ? (
+            <View style={styles.calloutAttend}>
+              <TrendingUpIcon size={18} color={colors.primary} />
+              <Text style={styles.calloutAttendText}>
+                You need {result.count} more {result.count === 1 ? 'class' : 'classes'}
+              </Text>
+            </View>
+          ) : (
+            <View style={styles.calloutUnreachable}>
+              <AlertCircleIcon size={18} color={colors.destructiveText} />
+              <Text style={styles.calloutUnreachableText}>
+                Target not possible
+              </Text>
+            </View>
+          )}
         </View>
       </View>
     </View>
@@ -619,9 +610,8 @@ function AttendanceCardSkeleton() {
       <View style={styles.calculatorSection}>
         <View style={styles.skeletonCalcRow}>
           <View style={styles.skeletonCalcLabel} />
-          <View style={styles.skeletonBadge} />
+          <View style={styles.skeletonInputBox} />
         </View>
-        <View style={styles.skeletonSliderTrack} />
       </View>
     </View>
   );
@@ -637,7 +627,6 @@ export default function AttendanceCalculator({
   const scrollRef = useRef(null);
   const scrollX = useRef(new Animated.Value(0)).current;
   const [activeIndex, setActiveIndex] = useState(0);
-  const [isSliding, setIsSliding] = useState(false);
 
   // Dynamically extract all available categories from parsed attendance data
   const categories = [];
@@ -776,7 +765,6 @@ export default function AttendanceCalculator({
             ref={scrollRef}
             horizontal
             pagingEnabled
-            scrollEnabled={!isSliding}
             showsHorizontalScrollIndicator={false}
             bounces={false}
             onScroll={Animated.event(
@@ -844,8 +832,6 @@ export default function AttendanceCalculator({
                       category={cat.key}
                       label={cat.label}
                       data={cat.data}
-                      onSlidingStart={() => setIsSliding(true)}
-                      onSlidingComplete={() => setIsSliding(false)}
                     />
                   </Animated.View>
                 </View>
@@ -1081,129 +1067,120 @@ const styles = StyleSheet.create({
     marginBottom: spacing.md,
   },
 
-  // Calculator Section (Spacious, prominent and comfortable)
+  // Calculator Section
   calculatorSection: {
-    marginTop: spacing.xs,
-    paddingTop: spacing.xs,
-    paddingBottom: spacing.sm,
+    marginTop: 4,
   },
-  calcHeaderRow: {
+  calculatorHeaderRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: spacing.sm,
-    paddingHorizontal: spacing.xs,
+    marginBottom: spacing.xs,
   },
-  targetLabelGroup: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-  },
-  targetTitleRow: {
+  calculatorTitleGroup: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
   },
-  targetLabel: {
-    fontSize: 15,
+  calculatorLabel: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: colors.primaryText,
+  },
+  inputContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.neutralButton,
+    borderRadius: radius.sm,
+    paddingHorizontal: 8,
+    height: 34,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  inputContainerFocused: {
+    borderColor: colors.primary,
+    backgroundColor: colors.card,
+  },
+  textInput: {
+    width: 42,
+    fontSize: 14,
     fontWeight: '700',
+    color: colors.primaryText,
+    textAlign: 'center',
+    paddingVertical: 0,
+  },
+  inputPercentSign: {
+    fontSize: 13,
+    fontWeight: '600',
     color: colors.secondaryText,
   },
-  targetPercentText: {
-    fontSize: 22,
-    fontWeight: '800',
-    color: colors.primaryText,
-    fontVariant: ['tabular-nums'],
-    letterSpacing: -0.3,
-  },
-  projectionWrapper: {
-    alignItems: 'flex-end',
-  },
 
-  // Dynamic Projection Pills (Substantial, comfortable touch padding & clear typography)
-  bunkPill: {
+  // Callout Boxes
+  resultContainer: {
+    marginTop: spacing.md,
+    marginBottom: spacing.sm,
+  },
+  calloutEmpty: {
+    backgroundColor: colors.neutralButton,
+    paddingVertical: 8,
+    paddingHorizontal: spacing.sm,
+    borderRadius: radius.sm,
+    alignItems: 'center',
+  },
+  calloutEmptyText: {
+    fontSize: 14,
+    color: colors.secondaryText,
+  },
+  calloutBunk: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: colors.successBg,
     borderColor: '#C3E6CB',
     borderWidth: 1,
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    borderRadius: radius.full,
-    gap: 6,
+    paddingVertical: 8,
+    paddingHorizontal: spacing.sm,
+    borderRadius: radius.sm,
+    gap: 8,
   },
-  bunkPillText: {
-    fontSize: 13,
-    fontWeight: '700',
+  calloutBunkText: {
+    fontSize: 14,
+    fontWeight: '600',
     color: colors.successText,
+    flex: 1,
   },
-  attendPill: {
+  calloutAttend: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#EBF5FF',
     borderColor: '#BFDBFE',
     borderWidth: 1,
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    borderRadius: radius.full,
-    gap: 6,
+    paddingVertical: 8,
+    paddingHorizontal: spacing.sm,
+    borderRadius: radius.sm,
+    gap: 8,
   },
-  attendPillText: {
-    fontSize: 13,
-    fontWeight: '700',
+  calloutAttendText: {
+    fontSize: 14,
+    fontWeight: '600',
     color: colors.primary,
+    flex: 1,
   },
-  unreachablePill: {
+  calloutUnreachable: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: colors.destructiveBg,
     borderColor: '#FECACA',
     borderWidth: 1,
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    borderRadius: radius.full,
-    gap: 6,
+    paddingVertical: 8,
+    paddingHorizontal: spacing.sm,
+    borderRadius: radius.sm,
+    gap: 8,
   },
-  unreachablePillText: {
-    fontSize: 13,
-    fontWeight: '700',
+  calloutUnreachableText: {
+    fontSize: 14,
+    fontWeight: '600',
     color: colors.destructiveText,
-  },
-  neutralPill: {
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    borderRadius: radius.full,
-    backgroundColor: colors.neutralButton,
-  },
-  neutralPillText: {
-    fontSize: 13,
-    color: colors.secondaryText,
-    fontWeight: '600',
-  },
-
-  // Slider & Scale (Platform-tailored width: wider on Android, inset on iOS)
-  sliderWrapper: {
-    marginTop: spacing.xs,
-    marginHorizontal: Platform.OS === 'android' ? 6 : spacing.base,
-  },
-  slider: {
-    width: '100%',
-    height: Platform.OS === 'android' ? 44 : 40,
-  },
-  sliderScaleRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingHorizontal: Platform.OS === 'android' ? 2 : 4,
-    marginTop: 0,
-  },
-  sliderScaleLabel: {
-    fontSize: 11,
-    color: colors.tertiaryText,
-    fontWeight: '600',
-  },
-  sliderScaleActive: {
-    color: colors.primary,
-    fontWeight: '800',
+    flex: 1,
   },
 
   // Skeleton Styles
@@ -1270,23 +1247,15 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
   },
   skeletonCalcLabel: {
-    width: 130,
-    height: 16,
+    width: 110,
+    height: 12,
     backgroundColor: '#E5E5EA',
     borderRadius: 3,
   },
-  skeletonBadge: {
-    width: 100,
-    height: 26,
+  skeletonInputBox: {
+    width: 50,
+    height: 30,
     backgroundColor: '#E5E5EA',
-    borderRadius: radius.full,
-  },
-  skeletonSliderTrack: {
-    marginHorizontal: Platform.OS === 'android' ? 6 : spacing.base,
-    height: 6,
-    backgroundColor: '#E5E5EA',
-    borderRadius: 3,
-    marginTop: 14,
-    marginBottom: 8,
+    borderRadius: 6,
   },
 });

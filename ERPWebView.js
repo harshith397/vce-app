@@ -17,6 +17,122 @@ const ERP_DASHBOARD_URL = 'https://erp.vce.ac.in/sinfo/DashBoard.aspx';
 const MOBILE_USER_AGENT =
   'Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36';
 
+/**
+ * Validates whether a navigation request is authorized.
+ * Restricts the WebView strictly to the college ERP portal (https://erp.vce.ac.in).
+ * Blocks external websites, Cloudflare rate-limits / info / terms / privacy pages,
+ * while allowing internal challenge verification assets so the captcha widget functions.
+ */
+function isAllowedNavigation(request) {
+  if (!request || !request.url) return false;
+  const url = request.url;
+  const isTopFrame = request.isTopFrame;
+  const lowerUrl = url.toLowerCase().trim();
+
+  // 1. Allow internal empty/data schemes
+  if (
+    lowerUrl === 'about:blank' ||
+    lowerUrl.startsWith('about:blank') ||
+    lowerUrl.startsWith('data:') ||
+    lowerUrl.startsWith('blob:')
+  ) {
+    return true;
+  }
+
+  // 2. Allow all legitimate ERP URLs (both https and http)
+  if (
+    lowerUrl.startsWith('https://erp.vce.ac.in') ||
+    lowerUrl.startsWith('http://erp.vce.ac.in')
+  ) {
+    return true;
+  }
+
+  // 3. Specifically block external marketing, terms, privacy, docs, or rate-limit pages
+  if (
+    lowerUrl.includes('www.cloudflare.com') ||
+    lowerUrl.includes('developers.cloudflare.com') ||
+    lowerUrl.includes('blog.cloudflare.com') ||
+    lowerUrl.includes('support.cloudflare.com') ||
+    lowerUrl.includes('cloudflare.com/privacypolicy') ||
+    lowerUrl.includes('cloudflare.com/website-terms') ||
+    lowerUrl.includes('policies.google.com') ||
+    lowerUrl.includes('rate-limit')
+  ) {
+    return false;
+  }
+
+  // 4. Allow legitimate captcha / challenge verification endpoints for subframes / internal verification
+  const isChallengeAsset =
+    lowerUrl.includes('challenges.cloudflare.com') ||
+    lowerUrl.includes('/cdn-cgi/challenge-platform') ||
+    lowerUrl.includes('google.com/recaptcha') ||
+    lowerUrl.includes('gstatic.com/recaptcha');
+
+  if (isChallengeAsset) {
+    // If top frame is navigating, challenge URLs should not replace the main app page
+    if (isTopFrame === true) {
+      return false;
+    }
+    return true;
+  }
+
+  // 5. Block all other external navigations
+  return false;
+}
+
+/**
+ * Script injected before content loads to intercept window.open and link clicks
+ * inside the main page, keeping navigation contained within erp.vce.ac.in.
+ */
+const INJECTED_NAV_GUARD = `
+  (function() {
+    try {
+      // 1. Intercept window.open so it cannot open external popups or navigate to external URLs
+      window.open = function(url) {
+        if (url) {
+          var lower = url.toLowerCase();
+          if (
+            (lower.indexOf('http://') !== 0 && lower.indexOf('https://') !== 0) ||
+            lower.indexOf('https://erp.vce.ac.in') === 0 ||
+            lower.indexOf('http://erp.vce.ac.in') === 0
+          ) {
+            window.location.href = url;
+            return window;
+          }
+        }
+        return null;
+      };
+
+      // 2. Intercept click events on links in the document
+      document.addEventListener('click', function(e) {
+        var el = e.target;
+        while (el && el.tagName !== 'A') {
+          el = el.parentElement;
+        }
+        if (el && el.href) {
+          var href = (el.href || '').toLowerCase();
+          if (
+            href.indexOf('javascript:') === 0 ||
+            href.indexOf('https://erp.vce.ac.in') === 0 ||
+            href.indexOf('http://erp.vce.ac.in') === 0
+          ) {
+            if (el.target === '_blank') {
+              el.target = '_self';
+            }
+            return;
+          }
+
+          // External URL: prevent default navigation
+          e.preventDefault();
+          e.stopPropagation();
+          return false;
+        }
+      }, true);
+    } catch (e) {}
+  })();
+  true;
+`;
+
 const ERPWebView = forwardRef(function ERPWebView(
   {
     onDashboardData,
@@ -297,6 +413,16 @@ const ERPWebView = forwardRef(function ERPWebView(
     }
   };
 
+  // Restrict WebView from navigating to any external pages (Cloudflare rate limits, docs, etc.)
+  const handleShouldStartLoadWithRequest = useCallback((request) => {
+    return isAllowedNavigation(request);
+  }, []);
+
+  // Intercept any attempts to open external windows or popups
+  const handleOpenWindow = useCallback(() => {
+    // Intentionally no-op to prevent creating new windows
+  }, []);
+
   return (
     <View style={[styles.container, style]}>
       <WebView
@@ -307,6 +433,9 @@ const ERPWebView = forwardRef(function ERPWebView(
         userAgent={MOBILE_USER_AGENT}
         mixedContentMode="always"
         setSupportMultipleWindows={false}
+        onShouldStartLoadWithRequest={handleShouldStartLoadWithRequest}
+        onOpenWindow={handleOpenWindow}
+        injectedJavaScriptBeforeContentLoaded={INJECTED_NAV_GUARD}
         onNavigationStateChange={handleNavigationStateChange}
         onLoadStart={handleLoadStart}
         onLoadEnd={handleLoadEnd}

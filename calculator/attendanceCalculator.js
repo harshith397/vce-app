@@ -16,8 +16,14 @@ export function computeAttendanceResult({ category, totalClasses, attended, targ
 
   const current = totalClasses > 0 ? (attended / totalClasses) * 100 : 0;
 
+  const catLower = String(category || "").toLowerCase();
+  const maxClasses = catLower.includes("eca") ? 16 : 600;
+
   if (current >= t) {
     const canBunk = Math.floor((100 * attended) / t - totalClasses);
+    if (canBunk > maxClasses) {
+      return { mode: "unreachable", count: canBunk };
+    }
     return { mode: "bunk", count: canBunk >= 0 ? canBunk : 0 };
   }
 
@@ -28,18 +34,10 @@ export function computeAttendanceResult({ category, totalClasses, attended, targ
 
   const rawNeed = (ratio * totalClasses - attended) / (1 - ratio);
   const needAttend = Math.ceil(rawNeed);
-  const catLower = String(category || "").toLowerCase();
-  let capTotal;
-  if (catLower.includes("eca")) {
-    capTotal = 16;
-  } else if (catLower.includes("regular")) {
-    capTotal = 450;
-  } else {
-    capTotal = 400;
-  }
+  const capTotal = maxClasses;
   const maxRemaining = capTotal - totalClasses;
 
-  if (!isFinite(rawNeed) || needAttend > maxRemaining) {
+  if (!isFinite(rawNeed) || needAttend > maxRemaining || needAttend > 600) {
     return { mode: "unreachable", count: needAttend, maxRemaining };
   }
 
@@ -88,7 +86,7 @@ export function calculateAttendance(categoryRecord, target = 75) {
     message: result?.mode === 'bunk'
       ? `You can bunk ${result.count} classes`
       : result?.mode === 'unreachable'
-      ? `Target not attainable`
+      ? `Target not possible`
       : `Need ${result?.count || 0} more classes`,
   };
 }
